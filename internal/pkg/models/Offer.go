@@ -11,4 +11,5 @@ type Offer struct {
 	City         string             `bson:"city" json:"city"`
 	ContactEmail string             `bson:"contactEmail" json:"contactEmail"`
 	Website      string             `bson:"website" json:"website"`
+	Active       bool               `bson:"active" json:"active"`
 }

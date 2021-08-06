@@ -2,11 +2,13 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/yosa12978/halo/internal/pkg/dto"
 	"github.com/yosa12978/halo/internal/pkg/models"
+	"github.com/yosa12978/halo/pkg/crypto"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongodb "go.mongodb.org/mongo-driver/mongo"
@@ -16,6 +18,7 @@ import (
 type ICompanyRepository interface {
 	GetCompanies() []models.Company
 	GetCompany(id_hex string) *models.Company
+	GetCompanyByEmail(email string) *models.Company
 	SearchCompany(s string) []models.Company
 	CreateCompany(comp dto.CreateCompany) error
 	UpdateCompany(id_hex string, comp dto.UpdateCompany) error
@@ -70,6 +73,17 @@ func (cr *CompanyRepository) GetCompany(id_hex string) *models.Company {
 	return &company
 }
 
+func (cr *CompanyRepository) GetCompanyByEmail(email string) *models.Company {
+	var company models.Company
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := cr.Db.Collection("companies").FindOne(ctx, bson.M{"email": email}).Decode(&company)
+	if err != nil {
+		return nil
+	}
+	return &company
+}
+
 func (cr *CompanyRepository) SearchCompany(s string) []models.Company {
 	var companies []models.Company
 	filter := bson.M{"title": bson.M{"$regex": primitive.Regex{Pattern: s}}}
@@ -96,11 +110,18 @@ func (cr *CompanyRepository) SearchCompany(s string) []models.Company {
 }
 
 func (cr *CompanyRepository) CreateCompany(comp dto.CreateCompany) error {
+	co := cr.GetCompanyByEmail(comp.Email)
+	usrRepo := NewUserRepository(cr.Db)
+	usr := usrRepo.GetUserByEmail(comp.Email)
+	if co != nil || usr != nil {
+		return errors.New("email is already in use")
+	}
+
 	company := models.Company{
 		BaseAccount: models.BaseAccount{
 			ID:       primitive.NewObjectID(),
 			Email:    comp.Email,
-			Password: comp.Password,
+			Password: crypto.GetMD5(comp.Password),
 			Roles:    []string{models.ROLE_COMPANY},
 			Regdate:  time.Now().Unix(),
 		},
@@ -126,7 +147,7 @@ func (cr *CompanyRepository) UpdateCompany(id_hex string, comp dto.UpdateCompany
 	defer cancel()
 	upd := bson.M{"$set": []bson.M{
 		{"companyName": comp.Name},
-		{"contactEmail": comp.Email},
+		{"contactEmail": comp.Contact},
 		{"website": comp.Website},
 		{"email": comp.Email},
 	},
