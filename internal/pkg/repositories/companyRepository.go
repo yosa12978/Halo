@@ -8,33 +8,37 @@ import (
 
 	"github.com/yosa12978/halo/internal/pkg/dto"
 	"github.com/yosa12978/halo/internal/pkg/models"
+	mongodb "github.com/yosa12978/halo/internal/pkg/mongo"
 	"github.com/yosa12978/halo/pkg/crypto"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	mongodb "go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type ICompanyRepository interface {
 	GetCompanies() []models.Company
-	GetCompany(id_hex string) *models.Company
-	GetCompanyByEmail(email string) *models.Company
+	GetCompany(id_hex string) (*models.Company, error)
+	GetCompanyByEmail(email string) (*models.Company, error)
+	GetCompanyByEmailAndPass(email string, password string) (*models.Company, error)
 	SearchCompany(s string) []models.Company
 	CreateCompany(comp dto.CreateCompany) error
 	UpdateCompany(id_hex string, comp dto.UpdateCompany) error
 	DeleteCompany(id_hex string) error
+	IsCompanyExist(email string) bool
+	IsCompPassExist(email string, password string) bool
 }
 
 type CompanyRepository struct {
-	Db *mongodb.Database
+	Db *mongo.Database
 }
 
-func NewCompanyRepository(db *mongodb.Database) ICompanyRepository {
-	return &CompanyRepository{Db: db}
+func NewCompanyRepository() ICompanyRepository {
+	return &CompanyRepository{Db: mongodb.GetDB()}
 }
 
 func (cr *CompanyRepository) GetCompanies() []models.Company {
-	findOptions := options.Find().SetSort(bson.M{"_id": -1})
+	findOptions := options.Find().SetSort(bson.M{"baseaccount._id": -1})
 	var companies []models.Company
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,30 +62,30 @@ func (cr *CompanyRepository) GetCompanies() []models.Company {
 	return companies
 }
 
-func (cr *CompanyRepository) GetCompany(id_hex string) *models.Company {
+func (cr *CompanyRepository) GetCompany(id_hex string) (*models.Company, error) {
 	id, err := primitive.ObjectIDFromHex(id_hex)
 	if err != nil {
-		return nil
+		return nil, errors.New("company not found")
 	}
 	var company models.Company
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err = cr.Db.Collection("companies").FindOne(ctx, bson.M{"_id": id}).Decode(&company)
+	err = cr.Db.Collection("companies").FindOne(ctx, bson.M{"baseaccount._id": id}).Decode(&company)
 	if err != nil {
-		return nil
+		return nil, errors.New("company not found")
 	}
-	return &company
+	return &company, nil
 }
 
-func (cr *CompanyRepository) GetCompanyByEmail(email string) *models.Company {
+func (cr *CompanyRepository) GetCompanyByEmail(email string) (*models.Company, error) {
 	var company models.Company
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := cr.Db.Collection("companies").FindOne(ctx, bson.M{"email": email}).Decode(&company)
+	err := cr.Db.Collection("companies").FindOne(ctx, bson.M{"baseaccount.email": email}).Decode(&company)
 	if err != nil {
-		return nil
+		return nil, errors.New("company not found")
 	}
-	return &company
+	return &company, nil
 }
 
 func (cr *CompanyRepository) SearchCompany(s string) []models.Company {
@@ -110,10 +114,10 @@ func (cr *CompanyRepository) SearchCompany(s string) []models.Company {
 }
 
 func (cr *CompanyRepository) CreateCompany(comp dto.CreateCompany) error {
-	co := cr.GetCompanyByEmail(comp.Email)
-	usrRepo := NewUserRepository(cr.Db)
-	usr := usrRepo.GetUserByEmail(comp.Email)
-	if co != nil || usr != nil {
+	co := cr.IsCompanyExist(comp.Email)
+	usrRepo := NewUserRepository()
+	usr := usrRepo.IsUserExist(comp.Email)
+	if co || usr {
 		return errors.New("email is already in use")
 	}
 
@@ -152,7 +156,7 @@ func (cr *CompanyRepository) UpdateCompany(id_hex string, comp dto.UpdateCompany
 		{"email": comp.Email},
 	},
 	}
-	_, err = cr.Db.Collection("companies").UpdateOne(ctx, bson.M{"_id": id}, upd)
+	_, err = cr.Db.Collection("companies").UpdateOne(ctx, bson.M{"baseaccount._id": id}, upd)
 	return err
 }
 
@@ -163,6 +167,50 @@ func (cr *CompanyRepository) DeleteCompany(id_hex string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err = cr.Db.Collection("companies").DeleteOne(ctx, bson.M{"_id": id})
+	_, err = cr.Db.Collection("companies").DeleteOne(ctx, bson.M{"baseaccount._id": id})
 	return err
+}
+
+func (cr *CompanyRepository) IsCompanyExist(email string) bool {
+	var company models.Company
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := cr.Db.Collection("companies").FindOne(ctx, bson.M{"baseaccount.email": email}).Decode(&company)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+func (cr *CompanyRepository) GetCompanyByEmailAndPass(email string, password string) (*models.Company, error) {
+	var company models.Company
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	filter := bson.M{
+		"$and": []bson.M{
+			{"baseaccount.email": email},
+			{"baseaccount.password": crypto.GetMD5(password)},
+		},
+	}
+	err := cr.Db.Collection("companies").FindOne(ctx, filter).Decode(&company)
+	if err != nil {
+		return nil, errors.New("company not found")
+	}
+	return &company, nil
+}
+
+func (cr *CompanyRepository) IsCompPassExist(email string, password string) bool {
+	var comp models.Company
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	filter := bson.M{"$and": []bson.M{
+		{"baseaccount.email": email},
+		{"baseaccount.password": crypto.GetMD5(password)},
+	},
+	}
+	err := cr.Db.Collection("companies").FindOne(ctx, filter).Decode(&comp)
+	if err != nil {
+		return false
+	}
+	return true
 }

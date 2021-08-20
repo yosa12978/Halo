@@ -10,7 +10,7 @@ func RespondStatusCode(w http.ResponseWriter, status int, message string) {
 }
 
 func RespondJson(w http.ResponseWriter, status_code int, data interface{}) {
-	w.WriteHeader(status_code)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status_code)
 	json.NewEncoder(w).Encode(data)
 }

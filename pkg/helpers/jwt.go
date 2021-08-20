@@ -14,7 +14,7 @@ func GetJwtSecret() string {
 	return os.Getenv("JWT_SECRET")
 }
 
-func GetJwtToken(user *models.User) (string, error) {
+func GetJwtToken(user *models.BaseAccount) (string, error) {
 	signingKey := []byte(GetJwtSecret())
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": user.ID,

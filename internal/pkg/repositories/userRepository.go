@@ -8,7 +8,9 @@ import (
 
 	"github.com/yosa12978/halo/internal/pkg/dto"
 	"github.com/yosa12978/halo/internal/pkg/models"
+	mongodb "github.com/yosa12978/halo/internal/pkg/mongo"
 	"github.com/yosa12978/halo/pkg/crypto"
+	"github.com/yosa12978/halo/pkg/helpers"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,30 +21,41 @@ type IUserRepository interface {
 	Login(lu dto.LoginUser) (string, error)
 	CreateUser(cu dto.CreateUser) error
 	GetUsers() []models.User
-	GetUserByID(id string) *models.User
-	GetUserByEmailAndPwd(email string, pwd string) *models.User
-	GetUserByEmail(email string) *models.User
+	GetUserByID(id string) (*models.User, error)
+	GetUserByEmailAndPwd(email string, pwd string) (*models.User, error)
+	GetUserByEmail(email string) (*models.User, error)
 	UpdateUser(id_hex string, pwd string, uu dto.UpdateUser) error
 	DeleteUser(id string, pwd string) error
+	IsUserExist(email string) bool
+	IsUserPassExist(email string, password string) bool
 }
 
 type UserRepository struct {
 	Db *mongo.Database
 }
 
-func NewUserRepository(db *mongo.Database) IUserRepository {
-	return &UserRepository{Db: db}
+func NewUserRepository() IUserRepository {
+	return &UserRepository{Db: mongodb.GetDB()}
 }
 
 func (ur *UserRepository) Login(lu dto.LoginUser) (string, error) {
-	return "", nil
+	usr, err := ur.GetUserByEmailAndPwd(lu.Email, lu.Password)
+	if err == nil {
+		return helpers.GetJwtToken(&usr.BaseAccount)
+	}
+	compRepo := NewCompanyRepository()
+	comp, err := compRepo.GetCompanyByEmailAndPass(lu.Email, lu.Password)
+	if err == nil {
+		return helpers.GetJwtToken(&comp.BaseAccount)
+	}
+	return "", errors.New("user not found")
 }
 
 func (ur *UserRepository) CreateUser(cu dto.CreateUser) error {
-	usr := ur.GetUserByEmail(cu.Email)
-	compRepo := NewCompanyRepository(ur.Db)
-	co := compRepo.GetCompanyByEmail(cu.Email)
-	if co != nil || usr != nil {
+	usr := ur.IsUserExist(cu.Email)
+	compRepo := NewCompanyRepository()
+	co := compRepo.IsCompanyExist(cu.Email)
+	if co || usr {
 		return errors.New("email is already in use")
 	}
 	user := models.User{
@@ -68,7 +81,7 @@ func (ur *UserRepository) CreateUser(cu dto.CreateUser) error {
 }
 
 func (ur *UserRepository) GetUsers() []models.User {
-	findOptions := options.Find().SetSort(bson.M{"_id": -1})
+	findOptions := options.Find().SetSort(bson.M{"baseaccount._id": -1})
 	var users []models.User
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -92,42 +105,69 @@ func (ur *UserRepository) GetUsers() []models.User {
 	return users
 }
 
-func (ur *UserRepository) GetUserByID(id_hex string) *models.User {
+func (ur *UserRepository) GetUserByID(id_hex string) (*models.User, error) {
 	id, err := primitive.ObjectIDFromHex(id_hex)
 	if err != nil {
-		return nil
+		return nil, errors.New("user not found")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var user models.User
-	err = ur.Db.Collection("users").FindOne(ctx, bson.M{"_id": id}).Decode(&user)
+	err = ur.Db.Collection("users").FindOne(ctx, bson.M{"baseaccount._id": id}).Decode(&user)
 	if err != nil {
-		return nil
+		return nil, errors.New("user not found")
 	}
-	return &user
+	return &user, nil
 }
 
-func (ur *UserRepository) GetUserByEmail(email string) *models.User {
+func (ur *UserRepository) GetUserByEmail(email string) (*models.User, error) {
 	var user models.User
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := ur.Db.Collection("users").FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	err := ur.Db.Collection("users").FindOne(ctx, bson.M{"baseaccount.email": email}).Decode(&user)
 	if err != nil {
-		return nil
+		return &user, errors.New("user not found")
 	}
-	return &user
+	return &user, nil
 }
 
-func (ur *UserRepository) GetUserByEmailAndPwd(email string, pwd string) *models.User {
+func (ur *UserRepository) IsUserExist(email string) bool {
 	var user models.User
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	filter := bson.M{"$and": []bson.M{{"email": email}, {"password": crypto.GetMD5(pwd)}}}
+	err := ur.Db.Collection("users").FindOne(ctx, bson.M{"baseaccount.email": email}).Decode(&user)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+func (ur *UserRepository) IsUserPassExist(email string, password string) bool {
+	var user models.User
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	filter := bson.M{"$and": []bson.M{
+		{"baseaccount.email": email},
+		{"baseaccount.password": crypto.GetMD5(password)},
+	},
+	}
 	err := ur.Db.Collection("users").FindOne(ctx, filter).Decode(&user)
 	if err != nil {
-		return nil
+		return false
 	}
-	return &user
+	return true
+}
+
+func (ur *UserRepository) GetUserByEmailAndPwd(email string, pwd string) (*models.User, error) {
+	var user models.User
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	filter := bson.M{"$and": []bson.M{{"baseaccount.email": email}, {"baseaccount.password": crypto.GetMD5(pwd)}}}
+	err := ur.Db.Collection("users").FindOne(ctx, filter).Decode(&user)
+	if err != nil {
+		return nil, errors.New("user not found")
+	}
+	return &user, nil
 }
 
 func (ur *UserRepository) UpdateUser(id_hex string, pwd string, uu dto.UpdateUser) error {
@@ -147,7 +187,7 @@ func (ur *UserRepository) UpdateUser(id_hex string, pwd string, uu dto.UpdateUse
 		{"statis": uu.Status},
 	},
 	}
-	_, err = ur.Db.Collection("users").UpdateOne(ctx, bson.M{"_id": id}, upd)
+	_, err = ur.Db.Collection("users").UpdateOne(ctx, bson.M{"baseaccount._id": id}, upd)
 	return err
 }
 
@@ -158,7 +198,7 @@ func (ur *UserRepository) DeleteUser(id_hex string, pwd string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	filter := bson.M{"$and": []bson.M{{"_id": id}, {"password": pwd}}}
+	filter := bson.M{"$and": []bson.M{{"baseaccount._id": id}, {"baseaccount.password": pwd}}}
 	_, err = ur.Db.Collection("users").DeleteOne(ctx, filter)
 	return err
 }

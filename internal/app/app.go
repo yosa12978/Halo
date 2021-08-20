@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/yosa12978/halo/internal/api"
 	"github.com/yosa12978/halo/internal/pkg/mongo"
+	"github.com/yosa12978/halo/internal/pkg/redis"
 )
 
 func Run() {
@@ -19,7 +20,15 @@ func Run() {
 	}
 
 	addr := os.Getenv(fmt.Sprintf("MONGO_ADDR_%s", os.Getenv("MODE")))
-	mongo.InitMongo(addr, os.Getenv("DB_NAME"))
+	_, err := mongo.InitMongo(addr, os.Getenv("DB_NAME"))
+	if err != nil {
+		panic(err)
+	}
+
+	err = redis.InitRedis(os.Getenv("REDIS_URL"), os.Getenv("REDIS_PWD"))
+	if err != nil {
+		panic(err)
+	}
 
 	api.Run()
 
